@@ -1,0 +1,154 @@
+import streamlit as st
+import pandas as pd
+from sklearn.metrics.pairwise import cosine_similarity
+import deepl
+
+auth_key = "5c04f5d8-8455-86ef-ed6a-8edc3a91e717:fx"
+
+data = pd.read_csv('xiecheng_users.csv')
+data = data[['title', 'homepage', 'image', 'user_name', 'rating']]
+
+# Create a dictionary to store multiple IDs corresponding to each title in different languages
+title_to_ids = {}
+unique_id = 0
+for title in data["title"].unique():
+    title_to_ids[title] = [unique_id]
+    unique_id += 1
+
+title_id_dict = {}
+for title, ids in title_to_ids.items():
+    for id in ids:
+        title_id_dict[id] = title
+
+data["itemid"] = data["title"].map(lambda x: title_to_ids[x][0])
+
+user_to_id = {}
+unique_id = 0
+for user_name in data["user_name"].unique():
+    user_to_id[user_name] = unique_id
+    unique_id += 1
+data["userid"] = data["user_name"].map(user_to_id)
+
+matrix = data.pivot_table(
+    index='userid', columns='itemid', values='rating', fill_value=0)
+matrix_normalized = matrix.sub(matrix.mean(axis=1), axis=0)
+
+cosine_sim = cosine_similarity(matrix_normalized.transpose())
+
+
+def translate_text(text, target_language):
+    translator = deepl.Translator(auth_key)
+    result = translator.translate_text(text, target_lang=target_language)
+    return result.text
+
+
+def recommend(input_title, target_language):
+    # Find the IDs corresponding to the input spot title in title_to_ids dictionary
+    input_ids = title_to_ids.get(input_title)
+
+    if input_ids is None:
+        return None
+
+    # The rest of the function remains the same
+    recommended_spots = []
+    for input_id in input_ids:
+        distance = sorted(list(
+            enumerate(cosine_sim[input_id])), reverse=True, key=lambda vector: vector[1])
+        for i in distance[1:6]:  # Exclude the first item as it represents the input spot itself
+            spot_id = i[0]
+            recommended_spot = title_id_dict.get(spot_id)
+
+            if recommended_spot is not None:
+                recommended_spots.append(recommended_spot)
+
+    return recommended_spots
+
+
+# Language-specific labels
+label_dict = {
+    "EN-GB": {
+        "title": "Tourist Spot Recommender",
+        "input_label": "Enter the destination spot:",
+        "select_label": "Select target language:",
+        "button_label": "Recommend",
+    },
+    "fr": {
+        "title": "Recommandateur de lieux touristiques",
+        "input_label": "Entrez le lieu de destination :",
+        "select_label": "Sélectionnez la langue cible :",
+        "button_label": "Recommander",
+    },
+    "es": {
+        "title": "Recomendador de Lugares Turísticos",
+        "input_label": "Ingrese el lugar de destino:",
+        "select_label": "Seleccione el idioma de destino:",
+        "button_label": "Recomendar",
+    },
+    "zh": {
+        "title": "旅游景点推荐系统",
+        "input_label": "输入目的地:",
+        "select_label": "选择目标语言:",
+        "button_label": "推荐",
+    },
+}
+
+# Create the Streamlit web app
+
+
+def main():
+    # Create a SessionState class to store the current target language
+    class SessionState:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    # Get the session state
+    session_state = SessionState(target_language="EN-GB")
+
+    # Select target language
+    target_language = st.selectbox(label_dict[session_state.target_language]["select_label"], [
+                                   "EN-GB", "fr", "es", "zh"])  # Add more languages as needed
+    session_state.target_language = target_language
+
+    # Set page title based on the target language
+    st.title(label_dict[session_state.target_language]["title"])
+
+    # Input box for destination spot
+    input_spot = st.text_input(
+        label_dict[session_state.target_language]["input_label"])
+
+    if st.button(label_dict[session_state.target_language]["button_label"]):
+        # Convert the input spot title to title case (first letter capitalized)
+        input_spot_title = input_spot.title()
+
+        # Translate the input spot title to the original language (Chinese) for recommendation
+        translated_input = translate_text(input_spot_title, "zh")
+
+        # Get the recommended spots based on the translated input
+        recommended_spots = recommend(
+            translated_input, session_state.target_language)
+
+        if recommended_spots is not None:
+            # Display the recommended spots in a row with five columns
+            cols = st.columns(5)
+            for i, destination in enumerate(recommended_spots):
+                row = data[data['title'] == destination]
+                homepage_url = row['homepage'].iloc[0]
+
+                # Find the image URL that has a corresponding homepage URL
+                image_url = row[row['homepage'].notnull()]['image'].iloc[0]
+
+                # Translate the recommended spot title to the target language
+                translated_spot = translate_text(
+                    destination, session_state.target_language)
+
+                # Display image with caption and clickable link in each column
+                with cols[i]:
+                    st.image(image_url, use_column_width=True)
+                    st.markdown(f"[{translated_spot}]({homepage_url})")
+        else:
+            st.write(
+                f"Spot '{input_spot}' not found. Please check the input spot title or try another spot.")
+
+
+if __name__ == "__main__":
+    main()
